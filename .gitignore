@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+main_stat.py
+pairs.json
+pairs_scaled.json

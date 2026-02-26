@@ -1,32 +1,33 @@
 # Robot Arena Backend
 
-FastAPI backend for the Robot Policy Comparison Study. Handles data collection, storage, and provides a real-time ranking dashboard.
+FastAPI backend for the Robot Policy Comparison Study. Collects participant responses, persists them to PostgreSQL, and serves a live dashboard with policy rankings computed by multiple algorithms.
 
 ## Features
 
-- **Data collection**: Stores participant responses with quiz and sanity check tracking
-- **Multiple ranking algorithms**: Bradley-Terry MLE, EM, Elo, Points-based
-- **Real-time dashboard**: View policy rankings as data comes in
-- **Legacy support**: Compatible with older frontend versions
+- **Annotation collection** — stores per-participant responses with quiz scores, sanity-check results, and failure tracking
+- **Multiple ranking algorithms** — Bradley-Terry MLE, EM with latent task-difficulty buckets, Elo, and points-based
+- **Live dashboard** — view policy standings at `GET /` with a 60-second server-side cache
+- **Version-aware pairs** — each config version maps to its own `pairs*.json` file
+- **Legacy support** — `/annotate/legacy` endpoint for older frontend versions
 
-## Quick Start
+## Setup
 
-### 1. Database Setup
+### 1. Database
 
 ```bash
-# Install PostgreSQL if needed
+# Install PostgreSQL (if not already installed)
 sudo apt install postgresql postgresql-contrib
 
-# Create database
+# Create the database
 sudo -u postgres psql -c "CREATE DATABASE robotarenainf;"
 
-# Run schema
+# Apply the schema
 sudo -u postgres psql -d robotarenainf -f schema.sql
 ```
 
-### 2. Update Credentials
+### 2. Credentials
 
-Edit `main.py`:
+Edit `main.py` with your database credentials:
 
 ```python
 def get_db_connection():
@@ -34,8 +35,8 @@ def get_db_connection():
         host="localhost",
         port=5432,
         database="robotarenainf",
-        user="your_username",      # Change this
-        password="your_password"   # Change this
+        user="your_username",
+        password="your_password"
     )
 ```
 
@@ -45,76 +46,44 @@ def get_db_connection():
 pip install fastapi uvicorn psycopg2-binary pydantic numpy scipy pandas statsmodels
 ```
 
-### 4. Add Video Pairs
+### 4. Add Pairs Files
 
-Copy `pairs.json` (and optionally `pairs_scaled.json`) to the backend directory:
+Copy the generated pairs file(s) from the frontend into the backend directory:
 
 ```bash
 cp ../videos/pairs.json .
 ```
 
-### 5. Run Server
+The version-to-file mapping is defined in `main.py`:
+
+```python
+PAIRS_FILES = {
+    None:   'pairs_v1.json',   # Legacy / no version specified
+    'v1.0': 'pairs_v1.json',
+    'v2.0': 'pairs_v2.json',
+    'v5.0': 'pairs.json',      # Current version
+}
+```
+
+### 5. Run the Server
 
 ```bash
-# Development
+# Development (with auto-reload)
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Production
 uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
-## Deployment with Cloudflare Tunnel
+---
 
-To expose your local backend to the internet without port forwarding:
+## API Reference
 
-### 1. Create Cloudflare Account
+### `POST /annotate`
 
-Sign up at [dash.cloudflare.com](https://dash.cloudflare.com)
+Save a completed study session.
 
-### 2. Set Up Tunnel
-
-1. Go to **Networks → Tunnels** in Cloudflare dashboard
-2. Create a new tunnel
-3. Configure:
-   - Local address: `http://localhost:8000`
-   - Subdomain: your choice (e.g., `robotarena.yourdomain.com`)
-4. Follow the provided instructions to install `cloudflared`
-
-### 3. Run the Tunnel
-
-```bash
-# Run the command provided by Cloudflare, e.g.:
-cloudflared tunnel run your-tunnel-name
-```
-
-### 4. Keep Running 24/7 (Optional)
-
-Set up as a system service for automatic restart:
-
-```bash
-# Install as service (Linux)
-sudo cloudflared service install
-sudo systemctl enable cloudflared
-sudo systemctl start cloudflared
-```
-
-See [Cloudflare's guide](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/as-a-service/) for detailed service setup.
-
-### Without Custom Domain
-
-Cloudflare can assign a temporary URL like `https://random-name.trycloudflare.com` if you don't have your own domain.
-
-**Resources:**
-- [Cloudflare Tunnel Documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/)
-- [Running as a Service](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/as-a-service/)
-
-## API Endpoints
-
-### POST `/annotate`
-
-Save annotation data from the study frontend.
-
-**Request:**
+**Request body:**
 ```json
 {
   "participant_id": "worker_123",
@@ -122,127 +91,167 @@ Save annotation data from the study frontend.
   "completion_code": "ABC12345",
   "total_time_ms": 450000,
   "response_length": 35,
-  "quiz_score": 4,
-  "quiz_total": 5,
+  "quiz_score": 8,
+  "quiz_total": 10,
   "sanity_check_results": [
-    {
-      "index": 360,
-      "correct": true,
-      "position": 12,
-      "userAnswer": "right",
-      "correctAnswer": "right"
-    }
+    { "index": 360, "correct": true, "position": 12, "userAnswer": "right", "correctAnswer": "right" }
   ],
   "sanity_checks_passed": 5,
   "sanity_checks_total": 5,
   "failed": false,
   "failure_reason": null,
-  "responses": [...],
+  "responses": [ ... ],
   "timestamp": "2024-12-08T10:30:00Z",
-  "config_version": "v3.0"
+  "config_version": "v5.0"
 }
 ```
 
 **Response:**
 ```json
-{"status": "success", "message": "Annotation saved successfully"}
+{ "status": "success", "message": "Annotation saved successfully" }
 ```
 
-### GET `/`
+### `GET /`
 
-Dashboard showing policy rankings with four algorithms:
-- Bradley-Terry MLE with confidence intervals
-- EM-based ranking with latent task difficulty buckets
-- Elo rating (K=32)
-- Points-based (Win=2, Tie=1, Loss=0)
+Live HTML dashboard showing policy rankings from all four algorithms. Results are cached for 60 seconds and invalidated when new annotations arrive.
 
-### POST `/annotate/legacy`
+### `POST /annotate/legacy`
 
-Legacy endpoint for older frontend versions.
+Accepts the older payload format (no quiz/sanity fields) for backwards compatibility.
 
-## Database Schema
+### `GET /versions`
 
-### Main Table: `annotations`
+Returns metadata about all configured pairs versions and their load status.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `participant_id` | VARCHAR | Worker/user identifier |
-| `participant_type` | VARCHAR | 'paid', 'free', or 'unknown' |
-| `completion_code` | VARCHAR | Code shown on completion |
-| `total_time_ms` | INTEGER | Total study time |
-| `response_length` | INTEGER | Number of responses |
-| `quiz_score` | INTEGER | Quiz correct answers (paid only) |
-| `quiz_total` | INTEGER | Total quiz questions |
-| `sanity_checks_passed` | INTEGER | Sanity checks passed |
-| `sanity_checks_total` | INTEGER | Total sanity checks |
-| `sanity_check_results` | JSONB | Detailed sanity check data |
-| `failed` | BOOLEAN | Whether participant failed |
-| `failure_reason` | VARCHAR | 'quiz_failed' or 'sanity_failed' |
-| `response_data` | JSONB | All responses |
-| `timestamp` | TIMESTAMP | Submission time |
-| `config_version` | VARCHAR | Frontend version |
+### `POST /versions/reload`
 
-### Useful Views
+Clears the in-memory pairs cache and reloads all files from disk. Also invalidates the dashboard cache. Useful after updating pairs files without restarting the server.
 
-- `participant_summary`: Aggregated stats by participant type
-- `quiz_performance`: Quiz scores for paid workers
-- `sanity_check_performance`: Sanity check pass rates
+### `POST /dashboard/refresh`
+
+Forces the dashboard cache to regenerate on the next `GET /` request.
+
+### `GET /stats/by-version`
+
+Returns annotation counts and timestamps grouped by `config_version`.
+
+---
 
 ## Ranking Algorithms
 
-Only `"regular"` type responses are used for ranking (quiz and sanity check responses are excluded).
+Only `"regular"` type responses are used for ranking — quiz and sanity-check responses are excluded.
 
-### Bradley-Terry MLE
-Maximum likelihood estimation with sandwich standard errors and confidence intervals.
+| Algorithm | Description |
+|-----------|-------------|
+| **Bradley-Terry MLE** | Maximum likelihood estimation of pairwise win probabilities, with sandwich (HC0) standard errors and 95% confidence intervals |
+| **EM (Latent Buckets)** | Expectation-maximization over latent task-difficulty buckets (60 buckets, 60 iterations); accounts for varying task complexity |
+| **Elo** | Sequential rating updates with K=32; some policies initialised with lower starting ratings to reflect prior expectations |
+| **Points-based** | Win = 2 pts, Tie = 1 pt, Loss = 0 pts; ranked by average score per comparison |
 
-### EM Algorithm
-Expectation-maximization with latent task difficulty buckets. Accounts for varying task complexity.
+---
 
-### Elo Rating
-Sequential updates with K-factor of 32. Some policies start with lower initial ratings.
+## Database Schema
 
-### Points-Based
-Simple scoring: Win=2 points, Tie=1 point, Loss=0 points.
+### Table: `annotations`
 
-## Filtering Bad Videos
+| Column                  | Type      | Description                                              |
+|-------------------------|-----------|----------------------------------------------------------|
+| `participant_id`        | VARCHAR   | Worker / user identifier                                 |
+| `participant_type`      | VARCHAR   | `'paid'`, `'free'`, or `'unknown'`                       |
+| `completion_code`       | VARCHAR   | Code displayed to the participant on completion          |
+| `total_time_ms`         | INTEGER   | Total time spent in the study (milliseconds)             |
+| `response_length`       | INTEGER   | Number of responses submitted                            |
+| `quiz_score`            | INTEGER   | Correct answers on the initial quiz (paid workers only)  |
+| `quiz_total`            | INTEGER   | Total initial quiz questions shown                       |
+| `sanity_checks_passed`  | INTEGER   | Number of sanity checks answered correctly               |
+| `sanity_checks_total`   | INTEGER   | Total sanity checks encountered                          |
+| `sanity_check_results`  | JSONB     | Per-check detail: index, position, answers, correctness  |
+| `failed`                | BOOLEAN   | Whether the participant was disqualified                 |
+| `failure_reason`        | VARCHAR   | `'quiz_failed'` or `'sanity_failed'`                     |
+| `response_data`         | JSONB     | Full array of responses (quiz, sanity_check, regular)    |
+| `timestamp`             | TIMESTAMP | Submission time                                          |
+| `config_version`        | VARCHAR   | Frontend version that generated the submission           |
 
-The backend filters out known problematic video pairs. Edit `BAD_VIDEO_SUBSTRINGS` in `main.py` to add/remove filters:
+### Views
+
+| View                       | Description                                     |
+|----------------------------|-------------------------------------------------|
+| `participant_summary`      | Completion and failure counts by participant type |
+| `quiz_performance`         | Quiz scores for paid workers                    |
+| `sanity_check_performance` | Sanity check pass rates per participant         |
+
+---
+
+## Filtering Bad Video Pairs
+
+Known-problematic pairs are excluded from all ranking computations. Add substrings to the set in `main.py`:
 
 ```python
 BAD_VIDEO_SUBSTRINGS = {
-    "test_Move the can to the right of the pot_test",
-    # ... add more as needed
+    "test_put blue cube to left corner of the table_test",
+    # add more as needed
 }
 ```
 
-## Troubleshooting
+Any pair whose `videoA` or `videoB` path contains a listed substring is silently skipped.
 
-### Database connection failed
+---
+
+## Deployment with Cloudflare Tunnel
+
+To expose the local server without port-forwarding or a dedicated IP:
+
 ```bash
-# Check PostgreSQL is running
-sudo systemctl status postgresql
+# 1. Install cloudflared
+# https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
 
-# Verify credentials
-psql -U your_username -d robotarenainf -c "SELECT 1;"
+# 2. Authenticate
+cloudflared tunnel login
+
+# 3. Create a tunnel and route it to the local server
+cloudflared tunnel create robot-arena
+cloudflared tunnel route dns robot-arena api.yourdomain.com
+
+# 4. Run the tunnel
+cloudflared tunnel run robot-arena
 ```
 
-### No data in dashboard
-- Verify `pairs.json` exists in backend directory
-- Check frontend is posting to correct URL
-- Look for errors in server logs
+To keep the tunnel running as a system service:
 
-### CORS errors
-The backend allows all origins by default. If needed, restrict in `main.py`:
+```bash
+sudo cloudflared service install
+sudo systemctl enable --now cloudflared
+```
 
+If you don't have a custom domain, Cloudflare can assign a temporary `*.trycloudflare.com` URL — no account required.
+
+---
+
+## Troubleshooting
+
+**Database connection refused**
+```bash
+sudo systemctl status postgresql   # Check the service is running
+psql -U your_username -d robotarenainf -c "SELECT 1;"  # Verify credentials
+```
+
+**Dashboard shows no data**
+- Confirm `pairs.json` (or the appropriate versioned file) exists in the backend directory.
+- Check that the frontend is posting to the correct backend URL.
+- Review server logs for JSON decode or index errors.
+
+**CORS errors in the browser**
+The allowed origins are set in `main.py`. Add your frontend's origin:
 ```python
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://yourdomain.com"],
-    # ...
+    allow_methods=["OPTIONS", "GET", "POST"],
+    allow_headers=["*"],
 )
 ```
 
-### Ranking errors
-- Ensure enough data points (at least a few responses per policy pair)
-- Check for NaN values in response data
-- Verify `pairs.json` indices match frontend
+**Ranking algorithms raise errors**
+- Ensure there are enough responses (at least a few per policy pair) before rankings converge.
+- Verify that `pairs.json` indices in the frontend responses match the file loaded by the backend.
+- Check for `NaN` values or missing fields in stored `response_data`.

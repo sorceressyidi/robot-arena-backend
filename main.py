@@ -17,19 +17,7 @@ import pandas as pd
 # BAD VIDEO FILTERING
 # ============================================================================
 BAD_VIDEO_SUBSTRINGS = {
-    "test_Move the can to the right of the pot_test",
-    "test_Move the cheese into the silver pot_test",
-    "move the cloth to the top right of the bowl_test",
-    "test_Move the green cloth to the bottom left of the table below the yellow pepper_test",
-    "test_move the silver pot to the lower right of the cooker_test",
-    "test_Place the metal pot on the front left corner of the purple towel_test0_2",
     "test_put blue cube to left corner of the table_test",
-    "test_put brown toy at the bottom center of the table_test",
-    "test_put pot or pan on stove and put cheese in pot or pan_test",
-    "test_put spatula on cutting board_test",
-    "test_Put the Blue spoon on top of the green cloth_test",
-    "test_put the yellow knife inside the orange pot_test",
-    "test_take the blue object and place between two silvered pots_test",
 }
 
 def is_bad_video(pair_info):
@@ -52,10 +40,10 @@ def clip_update(g, h, clip_val=1.0):
     update = np.divide(g, h_safe, out=np.zeros_like(g), where=h_safe!=0)
     return np.clip(update, -clip_val, clip_val)
 
-def run_em_ranking(all_responses, all_scaled_versions,
-                   policy_map, all_pairs, all_pairs_scaled):
+def run_em_ranking(all_responses, all_config_versions, policy_map):
     """
     Runs the EM algorithm to fit model parameters.
+    Now uses config_version to determine which pairs file to use.
     """
     EM_ITERS = 60
     N_BUCKETS = 60 
@@ -66,13 +54,13 @@ def run_em_ranking(all_responses, all_scaled_versions,
     N_POLICIES = len(policy_map)
     trials = []
     
-    for response, scaled_version in zip(all_responses, all_scaled_versions):
+    for response, config_version in zip(all_responses, all_config_versions):
         try:
             choice, pair_index_str = response['answer'].split('_')
-            if scaled_version is not None:
-                pair_info = all_pairs_scaled[int(pair_index_str)]
-            else:
-                pair_info = all_pairs[int(pair_index_str)]
+            # Get the correct pairs file for this version
+            pairs_data = get_pairs_for_version(config_version)
+            pair_info = pairs_data[int(pair_index_str)]
+            
             if is_bad_video(pair_info):
                 continue
             p_left, p_right = pair_info['videoA']['source'], pair_info['videoB']['source']
@@ -337,16 +325,23 @@ def bt_sandwich_std(wins, abilities):
         return np.full(num_players, np.nan)
 
 
-def run_bt_mle_ranking(all_responses, all_scaled_versions, policy_map, all_pairs, all_pairs_scaled):
+def run_bt_mle_ranking(all_responses, all_config_versions, policy_map):
+    """
+    Bradley-Terry MLE ranking.
+    Now uses config_version to determine which pairs file to use.
+    """
     N_POLICIES = len(policy_map)
     wins = np.zeros((N_POLICIES, N_POLICIES))
 
-    for response, scaled_version in zip(all_responses, all_scaled_versions):
+    for response, config_version in zip(all_responses, all_config_versions):
         try:
             choice, pair_index_str = response['answer'].split('_')
             pair_index = int(pair_index_str)
 
-            pair_info = all_pairs_scaled[pair_index] if scaled_version else all_pairs[pair_index]
+            # Get the correct pairs file for this version
+            pairs_data = get_pairs_for_version(config_version)
+            pair_info = pairs_data[pair_index]
+            
             if is_bad_video(pair_info):
                 continue
 
@@ -393,23 +388,77 @@ app = FastAPI(title="Robot Arena API ", description="Backend for robot policy co
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://zhangyidi.tech"],
     allow_credentials=True,
     allow_methods=["OPTIONS", "GET", "POST"],
     allow_headers=["*"],
 )
 
 # --- Configuration ---
-PAIRS_FILE_PATH = 'pairs.json'
-PAIRS_FILE_PATH_SCALED = 'pairs_scaled.json'
+# Version-based pairs file mapping
+# Each config_version maps to its corresponding pairs file
+PAIRS_FILES = {
+    None: 'pairs_v1.json',           # Legacy/default (no version specified)
+    'v1.0': 'pairs_v1.json',      # Version 1
+    'v2.0': 'pairs_v2.json',      # Version 2 (scaled)
+    'v5.0': 'pairs.json',         # Current version (v3)
+}
+
+# Default pairs file for unknown versions
+DEFAULT_PAIRS_FILE = 'pairs_v1.json'
+
+# Cache for loaded pairs files
+_pairs_cache = {}
+
+# Cache for dashboard rankings (to avoid recalculating on every request)
+_dashboard_cache = {
+    "html": None,
+    "last_updated": None,
+    "record_count": 0
+}
+CACHE_TTL_SECONDS = 60  # Refresh cache every 60 seconds
+
+def get_pairs_for_version(config_version: Optional[str]) -> list:
+    """
+    Get the pairs data for a specific config version.
+    Caches loaded files to avoid repeated disk reads.
+    """
+    # Determine the file path for this version
+    pairs_file = PAIRS_FILES.get(config_version, DEFAULT_PAIRS_FILE)
+    
+    # Check cache first
+    if pairs_file in _pairs_cache:
+        return _pairs_cache[pairs_file]
+    
+    # Load from disk
+    try:
+        with open(pairs_file, 'r') as f:
+            pairs_data = json.load(f)
+            _pairs_cache[pairs_file] = pairs_data
+            print(f"Loaded pairs file: {pairs_file} ({len(pairs_data)} pairs)")
+            return pairs_data
+    except FileNotFoundError:
+        print(f"Warning: Pairs file not found: {pairs_file}, falling back to default")
+        # Fallback to default
+        if DEFAULT_PAIRS_FILE in _pairs_cache:
+            return _pairs_cache[DEFAULT_PAIRS_FILE]
+        with open(DEFAULT_PAIRS_FILE, 'r') as f:
+            pairs_data = json.load(f)
+            _pairs_cache[DEFAULT_PAIRS_FILE] = pairs_data
+            return pairs_data
+
+def clear_pairs_cache():
+    """Clear the pairs cache (useful when files are updated)"""
+    global _pairs_cache
+    _pairs_cache = {}
 
 def get_db_connection():
     return psycopg2.connect(
         host="localhost",
         port=5432,
-        database="robotarenainf",
-        user="postgres",
-        password="sorceressyidi"  # Change this!
+        database="",
+        user="",
+        password=""  # Change this!
     )
 
 
@@ -503,19 +552,16 @@ def save_annotation(data: Annotation):
 def read_root_and_show_stats():
     """
     Dashboard showing policy rankings (without participant statistics).
+    Uses caching to avoid recalculating rankings on every request.
     """
-    # Load video pairs
-    try:
-        with open(PAIRS_FILE_PATH, 'r') as f:
-            all_pairs = json.load(f)
-    except FileNotFoundError:
-        return "<h1>Error: Could not find 'pairs.json'.</h1>"
+    global _dashboard_cache
     
-    try:
-        with open(PAIRS_FILE_PATH_SCALED, 'r') as f:
-            all_pairs_scaled = json.load(f)
-    except FileNotFoundError:
-        all_pairs_scaled = all_pairs  # Fallback to regular pairs
+    # Check if we have a valid cache
+    current_time = datetime.now()
+    if (_dashboard_cache["html"] is not None and 
+        _dashboard_cache["last_updated"] is not None and
+        (current_time - _dashboard_cache["last_updated"]).total_seconds() < CACHE_TTL_SECONDS):
+        return HTMLResponse(content=_dashboard_cache["html"])
     
     # Fetch data from database
     conn = get_db_connection()
@@ -534,6 +580,12 @@ def read_root_and_show_stats():
         return f"<h1>Database Error</h1><p>{e}</p>"
     finally:
         conn.close()
+    
+    # Check if data changed (simple check by count)
+    if (len(all_records) == _dashboard_cache["record_count"] and 
+        _dashboard_cache["html"] is not None):
+        _dashboard_cache["last_updated"] = current_time
+        return HTMLResponse(content=_dashboard_cache["html"])
         
     if not all_records:
         return """
@@ -547,7 +599,7 @@ def read_root_and_show_stats():
     
     # Process responses - only include regular responses (not quiz or sanity checks)
     all_responses = []
-    all_scaled_versions = []
+    all_config_versions = []
     
     for record in all_records:
         if record and record[0]:
@@ -559,7 +611,7 @@ def read_root_and_show_stats():
                 resp_type = resp.get('type', 'regular')
                 if resp_type == 'regular':
                     all_responses.append(resp)
-                    all_scaled_versions.append(config_version)
+                    all_config_versions.append(config_version)
     
     # Calculate policy stats
     policy_stats = defaultdict(lambda: {'wins': 0, 'losses': 0, 'ties': 0, 'points': 0, 'comparisons': 0})
@@ -570,14 +622,15 @@ def read_root_and_show_stats():
     elo_ratings = defaultdict(lambda: DEFAULT_STARTING_ELO)
     elo_ratings.update(STARTING_ELO_RATINGS)
 
-    for response, scaled_version in zip(all_responses, all_scaled_versions):
+    for response, config_version in zip(all_responses, all_config_versions):
         try:
             choice, pair_index_str = response['answer'].split('_')
             pair_index = int(pair_index_str)
-            if scaled_version is not None:
-                pair_info = all_pairs_scaled[pair_index]
-            else:
-                pair_info = all_pairs[pair_index]
+            
+            # Get the correct pairs file for this version
+            pairs_data = get_pairs_for_version(config_version)
+            pair_info = pairs_data[pair_index]
+            
             if is_bad_video(pair_info):
                 continue
             policy_left = pair_info['videoA']['source']
@@ -623,11 +676,11 @@ def read_root_and_show_stats():
     if all_policy_names:
         policy_map = {name: i for i, name in enumerate(all_policy_names)}
         try:
-            em_ranking = run_em_ranking(all_responses, all_scaled_versions, policy_map, all_pairs, all_pairs_scaled)
+            em_ranking = run_em_ranking(all_responses, all_config_versions, policy_map)
         except Exception as e:
             em_ranking = [("Error running EM", f"{e}")]
         try:
-            bt_mle_ranking = run_bt_mle_ranking(all_responses, all_scaled_versions, policy_map, all_pairs, all_pairs_scaled)
+            bt_mle_ranking = run_bt_mle_ranking(all_responses, all_config_versions, policy_map)
         except Exception as e:
             bt_mle_ranking = [("Error running BT MLE", f"{e}")]
 
@@ -693,6 +746,11 @@ def read_root_and_show_stats():
     
     html += "</div></body></html>"
     
+    # Update cache
+    _dashboard_cache["html"] = html
+    _dashboard_cache["last_updated"] = datetime.now()
+    _dashboard_cache["record_count"] = len(all_records)
+    
     return HTMLResponse(content=html)
 
 
@@ -741,5 +799,134 @@ def save_annotation_legacy(data: AnnotationLegacy):
     except Exception as e:
         conn.rollback()
         return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# VERSION MANAGEMENT ENDPOINTS
+# ============================================================================
+@app.get("/versions")
+def get_version_info():
+    """
+    Get information about available versions and their pairs files.
+    """
+    version_info = {}
+    for version, pairs_file in PAIRS_FILES.items():
+        version_key = version if version else "default (None)"
+        try:
+            pairs_data = get_pairs_for_version(version)
+            version_info[version_key] = {
+                "file": pairs_file,
+                "pairs_count": len(pairs_data),
+                "status": "loaded"
+            }
+        except Exception as e:
+            version_info[version_key] = {
+                "file": pairs_file,
+                "pairs_count": 0,
+                "status": f"error: {e}"
+            }
+    
+    return {
+        "versions": version_info,
+        "default_file": DEFAULT_PAIRS_FILE,
+        "cache_size": len(_pairs_cache)
+    }
+
+
+@app.post("/versions/reload")
+def reload_pairs_cache():
+    """
+    Clear and reload the pairs file cache.
+    Useful when pairs files have been updated.
+    """
+    global _dashboard_cache
+    clear_pairs_cache()
+    
+    # Also clear dashboard cache to force recalculation
+    _dashboard_cache = {
+        "html": None,
+        "last_updated": None,
+        "record_count": 0
+    }
+    
+    # Pre-load all configured versions
+    loaded = []
+    for version in PAIRS_FILES.keys():
+        try:
+            pairs_data = get_pairs_for_version(version)
+            loaded.append({
+                "version": version if version else "default",
+                "file": PAIRS_FILES[version],
+                "pairs_count": len(pairs_data)
+            })
+        except Exception as e:
+            loaded.append({
+                "version": version if version else "default",
+                "file": PAIRS_FILES.get(version, DEFAULT_PAIRS_FILE),
+                "error": str(e)
+            })
+    
+    return {
+        "status": "success",
+        "message": "Pairs cache cleared and reloaded",
+        "loaded_versions": loaded
+    }
+
+
+@app.post("/dashboard/refresh")
+def refresh_dashboard_cache():
+    """
+    Force refresh the dashboard cache.
+    """
+    global _dashboard_cache
+    _dashboard_cache = {
+        "html": None,
+        "last_updated": None,
+        "record_count": 0
+    }
+    return {"status": "success", "message": "Dashboard cache cleared. Next request will regenerate."}
+
+
+@app.get("/stats/by-version")
+def get_stats_by_version():
+    """
+    Get annotation statistics grouped by config version.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT 
+                    COALESCE(config_version, 'unknown') as version,
+                    COUNT(*) as total_annotations,
+                    COUNT(CASE WHEN failed = false THEN 1 END) as valid_annotations,
+                    COUNT(CASE WHEN failed = true THEN 1 END) as failed_annotations,
+                    SUM(response_length) as total_responses,
+                    MIN(timestamp) as first_annotation,
+                    MAX(timestamp) as last_annotation
+                FROM annotations
+                GROUP BY config_version
+                ORDER BY config_version
+            """)
+            results = cursor.fetchall()
+            
+            stats = []
+            for row in results:
+                stats.append({
+                    "version": row[0],
+                    "total_annotations": row[1],
+                    "valid_annotations": row[2],
+                    "failed_annotations": row[3],
+                    "total_responses": row[4],
+                    "first_annotation": row[5].isoformat() if row[5] else None,
+                    "last_annotation": row[6].isoformat() if row[6] else None,
+                    "pairs_file": PAIRS_FILES.get(row[0] if row[0] != 'unknown' else None, DEFAULT_PAIRS_FILE)
+                })
+            
+            return {"stats_by_version": stats}
+    except Exception as e:
+        return {"error": str(e)}
     finally:
         conn.close()

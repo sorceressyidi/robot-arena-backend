@@ -1,5 +1,4 @@
-import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,21 +11,13 @@ import numpy as np
 from typing import Optional, List
 from scipy.special import expit
 import pandas as pd
-
-# ============================================================================
-# BAD VIDEO FILTERING
-# ============================================================================
-BAD_VIDEO_SUBSTRINGS = {
-    "test_put blue cube to left corner of the table_test",
-}
-
-def is_bad_video(pair_info):
-    path_a = pair_info['videoA']['path']
-    path_b = pair_info['videoB']['path']
-    for substring in BAD_VIDEO_SUBSTRINGS:
-        if substring in path_a or substring in path_b:
-            return True
-    return False
+from config import (
+    DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD,
+    ALLOWED_ORIGINS,
+    PAIRS_FILES, DEFAULT_PAIRS_FILE,
+    CACHE_TTL_SECONDS,
+    ELO_K_FACTOR, ELO_STARTING_RATINGS, ELO_DEFAULT_RATING,
+)
 
 # ============================================================================
 # RANKING ALGORITHMS (unchanged from original)
@@ -61,8 +52,6 @@ def run_em_ranking(all_responses, all_config_versions, policy_map):
             pairs_data = get_pairs_for_version(config_version)
             pair_info = pairs_data[int(pair_index_str)]
             
-            if is_bad_video(pair_info):
-                continue
             p_left, p_right = pair_info['videoA']['source'], pair_info['videoB']['source']
             i_n, j_n = policy_map[p_left], policy_map[p_right]
             y_n = 2 if choice == 'left' else 0 if choice == 'right' else 1
@@ -342,8 +331,6 @@ def run_bt_mle_ranking(all_responses, all_config_versions, policy_map):
             pairs_data = get_pairs_for_version(config_version)
             pair_info = pairs_data[pair_index]
             
-            if is_bad_video(pair_info):
-                continue
 
             p_left = pair_info['videoA']['source']
             p_right = pair_info['videoB']['source']
@@ -388,35 +375,15 @@ app = FastAPI(title="Robot Arena API ", description="Backend for robot policy co
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://zhangyidi.tech"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["OPTIONS", "GET", "POST"],
     allow_headers=["*"],
 )
 
-# --- Configuration ---
-# Version-based pairs file mapping
-# Each config_version maps to its corresponding pairs file
-PAIRS_FILES = {
-    None: 'pairs_v1.json',           # Legacy/default (no version specified)
-    'v1.0': 'pairs_v1.json',      # Version 1
-    'v2.0': 'pairs_v2.json',      # Version 2 (scaled)
-    'v5.0': 'pairs.json',         # Current version (v3)
-}
-
-# Default pairs file for unknown versions
-DEFAULT_PAIRS_FILE = 'pairs_v1.json'
-
-# Cache for loaded pairs files
-_pairs_cache = {}
-
-# Cache for dashboard rankings (to avoid recalculating on every request)
-_dashboard_cache = {
-    "html": None,
-    "last_updated": None,
-    "record_count": 0
-}
-CACHE_TTL_SECONDS = 60  # Refresh cache every 60 seconds
+# In-memory caches
+_pairs_cache: dict = {}
+_dashboard_cache: dict = {"html": None, "last_updated": None, "record_count": 0}
 
 def get_pairs_for_version(config_version: Optional[str]) -> list:
     """
@@ -454,11 +421,11 @@ def clear_pairs_cache():
 
 def get_db_connection():
     return psycopg2.connect(
-        host="localhost",
-        port=5432,
-        database="",
-        user="",
-        password=""  # Change this!
+        host=DB_HOST,
+        port=DB_PORT,
+        database=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
     )
 
 
@@ -616,11 +583,8 @@ def read_root_and_show_stats():
     # Calculate policy stats
     policy_stats = defaultdict(lambda: {'wins': 0, 'losses': 0, 'ties': 0, 'points': 0, 'comparisons': 0})
     
-    K_FACTOR = 32
-    STARTING_ELO_RATINGS = {'cogact': 800, 'spatial': 800, 'octo': 800, 'robovlm': 800}
-    DEFAULT_STARTING_ELO = 1200
-    elo_ratings = defaultdict(lambda: DEFAULT_STARTING_ELO)
-    elo_ratings.update(STARTING_ELO_RATINGS)
+    elo_ratings = defaultdict(lambda: ELO_DEFAULT_RATING)
+    elo_ratings.update(ELO_STARTING_RATINGS)
 
     for response, config_version in zip(all_responses, all_config_versions):
         try:
@@ -631,8 +595,6 @@ def read_root_and_show_stats():
             pairs_data = get_pairs_for_version(config_version)
             pair_info = pairs_data[pair_index]
             
-            if is_bad_video(pair_info):
-                continue
             policy_left = pair_info['videoA']['source']
             policy_right = pair_info['videoB']['source']
         except (ValueError, IndexError, KeyError) as e:
@@ -662,8 +624,8 @@ def read_root_and_show_stats():
         rating_right = elo_ratings[policy_right]
         expected_left = 1 / (1 + 10**((rating_right - rating_left) / 400))
         expected_right = 1 - expected_left
-        elo_ratings[policy_left] = rating_left + K_FACTOR * (actual_left - expected_left)
-        elo_ratings[policy_right] = rating_right + K_FACTOR * (actual_right - expected_right)
+        elo_ratings[policy_left] = rating_left + ELO_K_FACTOR * (actual_left - expected_left)
+        elo_ratings[policy_right] = rating_right + ELO_K_FACTOR * (actual_right - expected_right)
 
     sorted_policies_by_score = sorted(policy_stats.items(), key=lambda i: (i[1]['points'] / i[1]['comparisons']) if i[1]['comparisons'] > 0 else 0, reverse=True)
     sorted_policies_by_elo = sorted(elo_ratings.items(), key=lambda i: i[1], reverse=True)

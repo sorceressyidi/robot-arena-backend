@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
+.DS_Store
+.vscode/
 .env
-main_stat.py
-pairs.json
-pairs_scaled.json
+
+# Local config with credentials — never commit this
+config.py
+
+# Generated output files
+bt_ranking_with_ci.csv
+pairs*.json

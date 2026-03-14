@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     
     -- Metadata
     timestamp TIMESTAMP NOT NULL,
-    config_version VARCHAR(50),   -- e.g., 'v3.0'
+    config_version VARCHAR(50),   -- e.g., 'v5.0'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

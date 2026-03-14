@@ -10,7 +10,9 @@ from collections import defaultdict
 import numpy as np
 from typing import Optional, List
 from scipy.special import expit
+from scipy.stats import norm
 import pandas as pd
+import statsmodels.api as sm
 from config import (
     DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD,
     ALLOWED_ORIGINS,
@@ -20,7 +22,7 @@ from config import (
 )
 
 # ============================================================================
-# RANKING ALGORITHMS (unchanged from original)
+# RANKING ALGORITHMS
 # ============================================================================
 def sigmoid(z):
     return expit(z)
@@ -179,9 +181,6 @@ def bradley_terry_offline(wins, max_iter=1000, tolerance=1e-6):
         if change < tolerance:
             break
     return abilities
-
-import statsmodels.api as sm
-from scipy.stats import norm
 
 def get_ranking_with_confidence(wins, model_names=None, alpha=0.05):
     num_models = wins.shape[0]
@@ -371,7 +370,7 @@ def run_bt_mle_ranking(all_responses, all_config_versions, policy_map):
 # ============================================================================
 # FASTAPI APPLICATION
 # ============================================================================
-app = FastAPI(title="Robot Arena API ", description="Backend for robot policy comparison study with quiz and sanity checks")
+app = FastAPI(title="Robot Arena API", description="Backend for robot policy comparison study with quiz and sanity checks")
 
 app.add_middleware(
     CORSMiddleware,
@@ -440,7 +439,7 @@ class SanityCheckResult(BaseModel):
     correctAnswer: Optional[str] = None
 
 class Annotation(BaseModel):
-    """New annotation model for  with quiz and sanity check support"""
+    """Annotation model with quiz and sanity check support."""
     participant_id: str
     participant_type: str  # 'paid' or 'free'
     completion_code: str
@@ -556,10 +555,10 @@ def read_root_and_show_stats():
         
     if not all_records:
         return """
-        <html><head><title>Robot Arena </title>
+        <html><head><title>Robot Arena</title>
         <style>body{font-family:sans-serif;max-width:800px;margin:2rem auto;padding:1rem}</style>
         </head><body>
-        <h1>🤖 Robot Arena </h1>
+        <h1>🤖 Robot Arena</h1>
         <p>No annotation data found yet. Waiting for participants...</p>
         </body></html>
         """
@@ -597,7 +596,7 @@ def read_root_and_show_stats():
             
             policy_left = pair_info['videoA']['source']
             policy_right = pair_info['videoB']['source']
-        except (ValueError, IndexError, KeyError) as e:
+        except (ValueError, IndexError, KeyError):
             continue
 
         policy_stats[policy_left]['comparisons'] += 1
@@ -652,7 +651,7 @@ def read_root_and_show_stats():
     html = f"""
     <html>
     <head>
-        <title>Robot Arena  Dashboard</title>
+        <title>Robot Arena Dashboard</title>
         <style>
             body {{ font-family: 'Segoe UI', sans-serif; background-color: #f8f9fa; margin: 0; padding: 2rem; }}
             .container {{ max-width: 900px; margin: auto; }}
@@ -668,7 +667,7 @@ def read_root_and_show_stats():
     </head>
     <body>
     <div class="container">
-        <h1>🤖 Robot Arena  Dashboard</h1>
+        <h1>🤖 Robot Arena Dashboard</h1>
         <p class="summary">Total Comparisons: <strong>{total_comparisons}</strong></p>
     """
     
